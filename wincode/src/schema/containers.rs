@@ -273,8 +273,9 @@ where
     type Dst = vec::Vec<T::Dst>;
 
     fn read(mut reader: impl Reader<'de>, dst: &mut MaybeUninit<Self::Dst>) -> ReadResult<()> {
-        let len = Len::read_prealloc_check::<T::Dst>(reader.by_ref())?;
+        let mut len = Len::read_prealloc_check::<T::Dst>(reader.by_ref())?;
         let mut vec: vec::Vec<T::Dst> = vec::Vec::with_capacity(len);
+        let mut result = Ok(());
 
         match T::TYPE_META {
             TypeMeta::Static {
@@ -283,8 +284,6 @@ where
                 let spare_capacity = vec.spare_capacity_mut();
                 // SAFETY: T::Dst is zero-copy eligible (no invalid bit patterns, no layout requirements, no endianness checks, etc.).
                 unsafe { reader.copy_into_slice_t(spare_capacity)? };
-                // SAFETY: `copy_into_slice_t` fills the entire spare capacity or errors.
-                unsafe { vec.set_len(len) };
             }
             TypeMeta::Static {
                 size,
@@ -296,31 +295,33 @@ where
                 // will consume `size * len` bytes, fully consuming the trusted window.
                 let mut reader = unsafe { reader.as_trusted_for(size * len) }?;
                 for i in 0..len {
-                    T::read(reader.by_ref(), unsafe { &mut *ptr })?;
-                    unsafe {
-                        ptr = ptr.add(1);
-                        #[allow(clippy::arithmetic_side_effects)]
-                        // i <= len
-                        vec.set_len(i + 1);
+                    if let Err(err) = T::read(reader.by_ref(), unsafe { &mut *ptr }) {
+                        len = i;
+                        result = Err(err);
+                        break;
                     }
+                    unsafe { ptr = ptr.add(1) };
                 }
             }
             TypeMeta::Dynamic => {
                 let mut ptr = vec.as_mut_ptr().cast::<MaybeUninit<T::Dst>>();
                 for i in 0..len {
-                    T::read(reader.by_ref(), unsafe { &mut *ptr })?;
-                    unsafe {
-                        ptr = ptr.add(1);
-                        #[allow(clippy::arithmetic_side_effects)]
-                        // i <= len
-                        vec.set_len(i + 1);
+                    if let Err(err) = T::read(reader.by_ref(), unsafe { &mut *ptr }) {
+                        len = i;
+                        result = Err(err);
+                        break;
                     }
+                    unsafe { ptr = ptr.add(1) };
                 }
             }
         }
+        // SAFETY: each branch either filled whole length or updated it to the last successful read
+        unsafe { vec.set_len(len) };
 
-        dst.write(vec);
-        Ok(())
+        if result.is_ok() {
+            dst.write(vec);
+        }
+        result
     }
 }
 
