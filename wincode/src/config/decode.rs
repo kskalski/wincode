@@ -1,15 +1,15 @@
 /// Configuration-aware decode functions.
 ///
-/// These mirror [`wincode::decode`](crate::decode) but let you specify the configuration `C`
-/// as an additional generic type parameter — no runtime config value required.
+/// These mirror [`wincode::decode`](crate::decode) but accept a `config: C` value so that
+/// both `T` and `C` are inferred at the call site — no turbofish required for the common case.
 ///
 /// Two families are provided:
 ///
 /// - **`decode` / `decode_into` / `decode_exact`** — `T` is both schema and destination
-///   (`T::Dst = T`); Rust can infer `T` from a type annotation.
+///   (`T::Dst = T`); fully inferred from a return-type annotation.
 ///
 /// - **`decode_via` / `decode_into_via` / `decode_exact_via`** — schema `S` and destination
-///   `S::Dst` may differ; a turbofish is always required.
+///   `S::Dst` may differ; `S` must still be named but `C` is inferred from the config value.
 use {
     crate::{
         config::Config,
@@ -22,7 +22,9 @@ use {
 
 // ── inference-friendly variants (T == T::Dst) ────────────────────────────────
 
-/// Decode a value of type `T` from `reader` using configuration `C`.
+/// Decode a value of type `T` from `reader` using the given `config`.
+///
+/// Both `T` and `C` are inferred — `T` from a return-type annotation, `C` from `config`.
 ///
 /// # Examples
 ///
@@ -32,20 +34,21 @@ use {
 ///
 /// type Cfg = Configuration<true, { config::DEFAULT_PREALLOCATION_SIZE_LIMIT }, FixIntLen<u32>>;
 ///
-/// let bytes = cencode::encode::<_, Cfg>(&99u64).unwrap();
-/// let value: u64 = cdecode::decode::<_, Cfg>(&bytes[..]).unwrap();
+/// let bytes = cencode::encode(&99u64, Cfg::new()).unwrap();
+/// let value: u64 = cdecode::decode(&bytes[..], Cfg::new()).unwrap();
 /// assert_eq!(value, 99);
 /// # }
 /// ```
 #[inline(always)]
-pub fn decode<'de, T, C: Config>(reader: impl Reader<'de>) -> ReadResult<T>
+#[expect(unused_variables)]
+pub fn decode<'de, T, C: Config>(reader: impl Reader<'de>, config: C) -> ReadResult<T>
 where
     T: SchemaRead<'de, C, Dst = T>,
 {
     T::get(reader)
 }
 
-/// Decode into an existing `MaybeUninit<T>` slot from `reader` using configuration `C`.
+/// Decode into an existing `MaybeUninit<T>` slot from `reader` using the given `config`.
 ///
 /// # Examples
 ///
@@ -56,16 +59,19 @@ where
 ///
 /// type Cfg = Configuration<true, { config::DEFAULT_PREALLOCATION_SIZE_LIMIT }, FixIntLen<u32>>;
 ///
-/// let bytes = cencode::encode::<u64, Cfg>(&7u64).unwrap();
-/// let mut dst = MaybeUninit::<u64>::uninit();
-/// cdecode::decode_into::<_, Cfg>(&bytes[..], &mut dst).unwrap();
-/// assert_eq!(unsafe { dst.assume_init() }, 7);
+/// let bytes = cencode::encode(&7u64, Cfg::new()).unwrap();
+/// let mut dst = MaybeUninit::uninit();
+/// cdecode::decode_into(&bytes[..], &mut dst, Cfg::new()).unwrap();
+/// let value: u64 = unsafe { dst.assume_init() };
+/// assert_eq!(value, 7);
 /// # }
 /// ```
 #[inline(always)]
+#[expect(unused_variables)]
 pub fn decode_into<'de, T, C: Config>(
     reader: impl Reader<'de>,
     dst: &mut MaybeUninit<T>,
+    config: C,
 ) -> ReadResult<()>
 where
     T: SchemaRead<'de, C, Dst = T>,
@@ -73,7 +79,7 @@ where
     T::read(reader, dst)
 }
 
-/// Decode from a byte slice using configuration `C`, returning an error if any trailing
+/// Decode from a byte slice using the given `config`, returning an error if any trailing
 /// bytes remain.
 ///
 /// # Examples
@@ -84,17 +90,18 @@ where
 ///
 /// type Cfg = Configuration<true, { config::DEFAULT_PREALLOCATION_SIZE_LIMIT }, FixIntLen<u32>>;
 ///
-/// let bytes = cencode::encode::<_, Cfg>(&55u64).unwrap();
-/// let value: u64 = cdecode::decode_exact::<_, Cfg>(&bytes).unwrap();
+/// let bytes = cencode::encode(&55u64, Cfg::new()).unwrap();
+/// let value: u64 = cdecode::decode_exact(&bytes, Cfg::new()).unwrap();
 /// assert_eq!(value, 55);
 ///
 /// let mut extra = bytes.clone();
 /// extra.push(0xFF);
-/// assert!(cdecode::decode_exact::<u64, Cfg>(&extra).is_err());
+/// assert!(cdecode::decode_exact::<u64, _>(&extra, Cfg::new()).is_err());
 /// # }
 /// ```
 #[inline(always)]
-pub fn decode_exact<'de, T, C: Config>(mut src: &'de [u8]) -> ReadResult<T>
+#[expect(unused_variables)]
+pub fn decode_exact<'de, T, C: Config>(mut src: &'de [u8], config: C) -> ReadResult<T>
 where
     T: SchemaRead<'de, C, Dst = T>,
 {
@@ -108,7 +115,9 @@ where
 
 // ── schema-explicit variants (S::Dst may differ from S) ──────────────────────
 
-/// Decode from `reader` using schema `S` and configuration `C`, returning `S::Dst`.
+/// Decode from `reader` using schema `S` and the given `config`, returning `S::Dst`.
+///
+/// `C` is inferred from `config`; only `S` needs to be named.
 ///
 /// # Examples
 ///
@@ -122,15 +131,15 @@ where
 /// type Cfg = Configuration<true, { config::DEFAULT_PREALLOCATION_SIZE_LIMIT }, FixIntLen<u32>>;
 ///
 /// let original: Vec<u8> = vec![1, 2, 3];
-/// let bytes = cencode::encode::<Vec<u8>, Cfg>(&original).unwrap();
-/// // containers::Vec with matching FixIntLen<u32> length encoding.
+/// let bytes = cencode::encode(&original, Cfg::new()).unwrap();
 /// type VecSchema = containers::Vec<u8, FixIntLen<u32>>;
-/// let decoded: Vec<u8> = cdecode::decode_via::<VecSchema, Cfg>(&bytes[..]).unwrap();
+/// let decoded: Vec<u8> = cdecode::decode_via::<VecSchema, _>(&bytes[..], Cfg::new()).unwrap();
 /// assert_eq!(decoded, original);
 /// # }
 /// ```
 #[inline(always)]
-pub fn decode_via<'de, S, C: Config>(reader: impl Reader<'de>) -> ReadResult<S::Dst>
+#[expect(unused_variables)]
+pub fn decode_via<'de, S, C: Config>(reader: impl Reader<'de>, config: C) -> ReadResult<S::Dst>
 where
     S: SchemaRead<'de, C>,
 {
@@ -138,11 +147,13 @@ where
 }
 
 /// Decode from `reader` into an existing `MaybeUninit<S::Dst>` slot using schema `S`
-/// and configuration `C`.
+/// and the given `config`.
 #[inline(always)]
+#[expect(unused_variables)]
 pub fn decode_into_via<'de, S, C: Config>(
     reader: impl Reader<'de>,
     dst: &mut MaybeUninit<S::Dst>,
+    config: C,
 ) -> ReadResult<()>
 where
     S: SchemaRead<'de, C>,
@@ -150,10 +161,11 @@ where
     S::read(reader, dst)
 }
 
-/// Decode from a byte slice using schema `S` and configuration `C`, returning an error
+/// Decode from a byte slice using schema `S` and the given `config`, returning an error
 /// if any trailing bytes remain.
 #[inline(always)]
-pub fn decode_exact_via<'de, S, C: Config>(mut src: &'de [u8]) -> ReadResult<S::Dst>
+#[expect(unused_variables)]
+pub fn decode_exact_via<'de, S, C: Config>(mut src: &'de [u8], config: C) -> ReadResult<S::Dst>
 where
     S: SchemaRead<'de, C>,
 {
