@@ -205,8 +205,7 @@ mod tests {
     use {
         super::*,
         crate::{containers, encode, len::BincodeLen},
-        alloc::vec,
-        alloc::vec::Vec,
+        alloc::{vec, vec::Vec},
     };
 
     /// `decode` infers `T` from the type annotation — no turbofish needed.
@@ -270,7 +269,11 @@ mod tests {
             _pad: [u8; 3],
         }
 
-        let original = Frame { data: [1, 2, 3, 4], tag: 7, _pad: [0; 3] };
+        let original = Frame {
+            data: [1, 2, 3, 4],
+            tag: 7,
+            _pad: [0; 3],
+        };
         let mut serialized = encode::encode(&original).unwrap();
 
         // &mut [u8] is just another Reader — the schema yields &mut Frame directly
@@ -280,6 +283,13 @@ mod tests {
         view.tag = 99;
 
         let result: Frame = decode(&serialized[..]).unwrap();
-        assert_eq!(result, Frame { data: [10, 20, 30, 40], tag: 99, _pad: [0; 3] });
+        assert_eq!(
+            result,
+            Frame {
+                data: [10, 20, 30, 40],
+                tag: 99,
+                _pad: [0; 3]
+            }
+        );
     }
 }

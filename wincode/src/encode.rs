@@ -1,3 +1,4 @@
+use crate::{config::DefaultConfig, error::WriteResult, io::Writer, schema::SchemaWrite};
 /// Standalone encode functions using [`DefaultConfig`](crate::config::DefaultConfig).
 ///
 /// Two families are provided:
@@ -12,12 +13,6 @@
 ///   because `S` cannot be inferred from the source value alone.
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
-use crate::{
-    config::DefaultConfig,
-    error::WriteResult,
-    io::Writer,
-    schema::SchemaWrite,
-};
 
 // ── inference-friendly variants (T == T::Src) ────────────────────────────────
 

@@ -1,3 +1,4 @@
+use crate::{config::Config, error::WriteResult, io::Writer, schema::SchemaWrite};
 /// Configuration-aware encode functions.
 ///
 /// These mirror [`wincode::encode`](crate::encode) but accept a `config: C` value so that
@@ -12,12 +13,6 @@
 ///   `S::Src` may differ; `S` must still be named but `C` is inferred from the config value.
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
-use crate::{
-    config::Config,
-    error::WriteResult,
-    io::Writer,
-    schema::SchemaWrite,
-};
 
 // ── inference-friendly variants (T == T::Src) ────────────────────────────────
 
@@ -148,7 +143,11 @@ where
 /// Encode `src` into the provided `writer` using schema `S` and the given `config`.
 #[inline]
 #[expect(unused_variables)]
-pub fn encode_into_via<S, C: Config>(mut writer: impl Writer, src: &S::Src, config: C) -> WriteResult<()>
+pub fn encode_into_via<S, C: Config>(
+    mut writer: impl Writer,
+    src: &S::Src,
+    config: C,
+) -> WriteResult<()>
 where
     S: SchemaWrite<C>,
 {
@@ -215,14 +214,15 @@ mod tests {
     /// value-based config:: API.
     #[test]
     fn custom_schema_impl_with_config_api() {
-        use crate::{
-            SchemaRead, SchemaWrite, TypeMeta,
-            config::Config,
-            error::{ReadResult, WriteResult},
-            io::{Reader, Writer},
-
+        use {
+            crate::{
+                SchemaRead, SchemaWrite, TypeMeta,
+                config::Config,
+                error::{ReadResult, WriteResult},
+                io::{Reader, Writer},
+            },
+            core::mem::MaybeUninit,
         };
-        use core::mem::MaybeUninit;
 
         struct Pair {
             a: u32,
@@ -270,7 +270,8 @@ mod tests {
 
         // DefaultConfig
         let bytes = encode(&pair, crate::config::DefaultConfig::default()).unwrap();
-        let decoded: Pair = cdecode::decode(&bytes[..], crate::config::DefaultConfig::default()).unwrap();
+        let decoded: Pair =
+            cdecode::decode(&bytes[..], crate::config::DefaultConfig::default()).unwrap();
         assert_eq!(decoded.a, 0xAA);
         assert_eq!(decoded.b, 0xBB);
 
