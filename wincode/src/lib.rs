@@ -561,6 +561,8 @@ mod schema;
 pub use schema::*;
 mod serde;
 pub use serde::*;
+pub mod decode;
+pub mod encode;
 pub mod config;
 #[cfg(test)]
 mod proptest_config;
