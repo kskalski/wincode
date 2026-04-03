@@ -388,6 +388,15 @@ pub trait ConfigCore: 'static + Sized {
     const ZERO_COPY_ALIGN_CHECK: bool;
     type ByteOrder: ByteOrder;
     type IntEncoding: IntEncoding<Self::ByteOrder>;
+
+    /// Construct an instance of this configuration.
+    ///
+    /// All [`Configuration`] types are zero-sized, so this is a no-op at runtime.
+    /// It exists so that generic code bounded on `C: ConfigCore` can produce a `C`
+    /// value — for example to pass to [`config::decode`](super::decode) /
+    /// [`config::encode`](super::encode) functions from within a [`SchemaRead`] or
+    /// [`SchemaWrite`] implementation.
+    fn new() -> Self;
 }
 
 impl<
@@ -419,6 +428,11 @@ where
     const ZERO_COPY_ALIGN_CHECK: bool = ZERO_COPY_ALIGN_CHECK;
     type ByteOrder = B;
     type IntEncoding = I;
+
+    #[inline(always)]
+    fn new() -> Self {
+        generate()
+    }
 }
 
 /// Trait for configuration access when you need access to type parameters that depend on [`Config`]

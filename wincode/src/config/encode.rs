@@ -206,4 +206,78 @@ mod tests {
         let vec: Vec<u8> = vec![1, 2, 3];
         assert_eq!(encoded_size(&vec, FixLenConfig::new()).unwrap(), 7);
     }
+
+    /// Demonstrate using `config::encode` / `config::decode` both inside impl bodies
+    /// (via `C::new()`) and at the call site.
+    ///
+    /// `ConfigCore::new()` lets generic impl bodies construct a `C` value, bridging
+    /// the type-parameter-only world of `SchemaRead`/`SchemaWrite` into the
+    /// value-based config:: API.
+    #[test]
+    fn custom_schema_impl_with_config_api() {
+        use crate::{
+            SchemaRead, SchemaWrite, TypeMeta,
+            config::Config,
+            error::{ReadResult, WriteResult},
+            io::{Reader, Writer},
+
+        };
+        use core::mem::MaybeUninit;
+
+        struct Pair {
+            a: u32,
+            b: u32,
+        }
+
+        // ── impl bodies: use config:: functions via C::new() ─────────────────
+        unsafe impl<C: Config> SchemaWrite<C> for Pair {
+            type Src = Pair;
+
+            const TYPE_META: TypeMeta = TypeMeta::Static {
+                size: 8,
+                zero_copy: false,
+            };
+
+            fn size_of(_src: &Pair) -> WriteResult<usize> {
+                Ok(8)
+            }
+
+            fn write(mut writer: impl Writer, src: &Pair) -> WriteResult<()> {
+                encode_into_via::<u32, C>(writer.by_ref(), &src.a, C::new())?;
+                encode_into_via::<u32, C>(writer.by_ref(), &src.b, C::new())?;
+                Ok(())
+            }
+        }
+
+        unsafe impl<'de, C: Config> SchemaRead<'de, C> for Pair {
+            type Dst = Pair;
+
+            const TYPE_META: TypeMeta = TypeMeta::Static {
+                size: 8,
+                zero_copy: false,
+            };
+
+            fn read(mut reader: impl Reader<'de>, dst: &mut MaybeUninit<Pair>) -> ReadResult<()> {
+                let a: u32 = cdecode::decode(reader.by_ref(), C::new())?;
+                let b: u32 = cdecode::decode(reader.by_ref(), C::new())?;
+                dst.write(Pair { a, b });
+                Ok(())
+            }
+        }
+
+        // ── call site: config:: APIs, no turbofish ────────────────────────────
+        let pair = Pair { a: 0xAA, b: 0xBB };
+
+        // DefaultConfig
+        let bytes = encode(&pair, crate::config::DefaultConfig::default()).unwrap();
+        let decoded: Pair = cdecode::decode(&bytes[..], crate::config::DefaultConfig::default()).unwrap();
+        assert_eq!(decoded.a, 0xAA);
+        assert_eq!(decoded.b, 0xBB);
+
+        // FixIntLen<u32> config — same schema impl, different config, no code change
+        let bytes = encode(&pair, FixLenConfig::new()).unwrap();
+        let decoded: Pair = cdecode::decode(&bytes[..], FixLenConfig::new()).unwrap();
+        assert_eq!(decoded.a, 0xAA);
+        assert_eq!(decoded.b, 0xBB);
+    }
 }
