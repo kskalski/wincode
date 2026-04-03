@@ -32,8 +32,8 @@ use {
 ///
 /// type Cfg = Configuration<true, { config::DEFAULT_PREALLOCATION_SIZE_LIMIT }, FixIntLen<u32>>;
 ///
-/// let bytes = cencode::encode::<u64, Cfg>(&99u64).unwrap();
-/// let value: u64 = cdecode::decode::<u64, Cfg>(&bytes[..]).unwrap();
+/// let bytes = cencode::encode::<_, Cfg>(&99u64).unwrap();
+/// let value: u64 = cdecode::decode::<_, Cfg>(&bytes[..]).unwrap();
 /// assert_eq!(value, 99);
 /// # }
 /// ```
@@ -58,7 +58,7 @@ where
 ///
 /// let bytes = cencode::encode::<u64, Cfg>(&7u64).unwrap();
 /// let mut dst = MaybeUninit::<u64>::uninit();
-/// cdecode::decode_into::<u64, Cfg>(&bytes[..], &mut dst).unwrap();
+/// cdecode::decode_into::<_, Cfg>(&bytes[..], &mut dst).unwrap();
 /// assert_eq!(unsafe { dst.assume_init() }, 7);
 /// # }
 /// ```
@@ -84,8 +84,9 @@ where
 ///
 /// type Cfg = Configuration<true, { config::DEFAULT_PREALLOCATION_SIZE_LIMIT }, FixIntLen<u32>>;
 ///
-/// let bytes = cencode::encode::<u64, Cfg>(&55u64).unwrap();
-/// assert_eq!(cdecode::decode_exact::<u64, Cfg>(&bytes).unwrap(), 55);
+/// let bytes = cencode::encode::<_, Cfg>(&55u64).unwrap();
+/// let value: u64 = cdecode::decode_exact::<_, Cfg>(&bytes).unwrap();
+/// assert_eq!(value, 55);
 ///
 /// let mut extra = bytes.clone();
 /// extra.push(0xFF);

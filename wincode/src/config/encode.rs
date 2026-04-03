@@ -31,7 +31,7 @@ use crate::{
 ///
 /// type Cfg = Configuration<true, { config::DEFAULT_PREALLOCATION_SIZE_LIMIT }, FixIntLen<u32>>;
 ///
-/// let bytes = cencode::encode::<u64, Cfg>(&42u64).unwrap();
+/// let bytes = cencode::encode::<_, Cfg>(&42u64).unwrap();
 /// assert_eq!(bytes.len(), 8);
 /// # }
 /// ```
@@ -64,8 +64,8 @@ where
 /// type Cfg = Configuration<true, { config::DEFAULT_PREALLOCATION_SIZE_LIMIT }, FixIntLen<u32>>;
 ///
 /// let mut buf = [0u8; 8];
-/// cencode::encode_into::<u64, Cfg>(&mut buf[..], &42u64).unwrap();
-/// let value: u64 = cdecode::decode::<u64, Cfg>(&buf[..]).unwrap();
+/// cencode::encode_into::<_, Cfg>(&mut buf[..], &42u64).unwrap();
+/// let value: u64 = cdecode::decode::<_, Cfg>(&buf[..]).unwrap();
 /// assert_eq!(value, 42);
 /// # }
 /// ```
@@ -90,7 +90,7 @@ where
 ///
 /// let vec: Vec<u8> = vec![1, 2, 3];
 /// // 4-byte FixIntLen<u32> length prefix + 3 bytes data = 7 bytes total.
-/// assert_eq!(cencode::encoded_size::<Vec<u8>, Cfg>(&vec).unwrap(), 7);
+/// assert_eq!(cencode::encoded_size::<_, Cfg>(&vec).unwrap(), 7);
 /// # }
 /// ```
 #[inline(always)]
@@ -171,34 +171,29 @@ mod tests {
     type FixLenConfig =
         Configuration<true, { config::DEFAULT_PREALLOCATION_SIZE_LIMIT }, FixIntLen<u32>>;
 
-    /// `encode` infers `T` from the argument — no turbofish needed.
-    #[test]
-    fn encode_infers_type() {
-        let bytes = encode::<u64, FixLenConfig>(&42u64).unwrap();
-        assert_eq!(bytes.len(), 8);
-    }
-
+    /// `T` is inferred from the argument; only `C` needs to be named.
     /// 4-byte `FixIntLen<u32>` prefix makes the encoding differ from the default.
     #[test]
-    fn encode_with_explicit_config() {
+    fn encode_with_config() {
         let vec: Vec<u8> = vec![1, 2, 3];
-        let bytes = encode::<Vec<u8>, FixLenConfig>(&vec).unwrap();
+        let bytes = encode::<_, FixLenConfig>(&vec).unwrap();
         assert_eq!(bytes.len(), 7);
         let len = u32::from_le_bytes(bytes[..4].try_into().unwrap());
         assert_eq!(len as usize, vec.len());
     }
 
+    /// `T` is inferred from the argument (encode) and from the return annotation (decode).
     #[test]
-    fn encode_into_buffer() {
+    fn roundtrip_infers_t() {
         let mut buf = [0u8; 8];
-        encode_into::<u64, FixLenConfig>(&mut buf[..], &0xCAFEu64).unwrap();
-        let value: u64 = cdecode::decode::<u64, FixLenConfig>(&buf[..]).unwrap();
+        encode_into::<_, FixLenConfig>(&mut buf[..], &0xCAFEu64).unwrap();
+        let value: u64 = cdecode::decode::<_, FixLenConfig>(&buf[..]).unwrap();
         assert_eq!(value, 0xCAFEu64);
     }
 
     #[test]
     fn encoded_size_with_config() {
         let vec: Vec<u8> = vec![1, 2, 3];
-        assert_eq!(encoded_size::<Vec<u8>, FixLenConfig>(&vec).unwrap(), 7);
+        assert_eq!(encoded_size::<_, FixLenConfig>(&vec).unwrap(), 7);
     }
 }
