@@ -429,6 +429,11 @@ unsafe impl<'a, R: Reader<'a> + ?Sized> Reader<'a> for &mut R {
     }
 
     #[inline(always)]
+    fn as_limited_for(&mut self, size: usize) -> impl Reader<'a> {
+        (*self).as_limited_for(size)
+    }
+
+    #[inline(always)]
     unsafe fn as_trusted_for_seq(
         &mut self,
         len: usize,

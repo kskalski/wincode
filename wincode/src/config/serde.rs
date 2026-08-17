@@ -303,11 +303,11 @@ mod tests {
 
         assert!(matches!(
             deserialize::<u64, _>(&bytes, limited),
-            Err(ReadError::Io(IoReadError::ReadSizeLimit(4)))
+            Err(ReadError::Io(IoReadError::ReadSizeLimit(8)))
         ));
         assert!(matches!(
             deserialize_from::<u64, _>(bytes.as_slice(), limited),
-            Err(ReadError::Io(IoReadError::ReadSizeLimit(4)))
+            Err(ReadError::Io(IoReadError::ReadSizeLimit(8)))
         ));
 
         let exact = Configuration::default().with_deserialization_size_limit::<8>();
@@ -315,6 +315,24 @@ mod tests {
 
         let disabled = limited.disable_deserialization_size_limit();
         assert_eq!(deserialize::<u64, _>(&bytes, disabled).unwrap(), 42);
+    }
+
+    /// The limited reader must leave the parent positioned at the first unread byte, otherwise
+    /// `deserialize_exact` cannot see the trailing bytes.
+    #[test]
+    fn exact_deserialization_sees_trailing_bytes_under_limit() {
+        let mut bytes = [0u8; 12];
+        bytes[..8].copy_from_slice(&42u64.to_le_bytes());
+        let limited = Configuration::default().with_deserialization_size_limit::<12>();
+
+        assert!(matches!(
+            deserialize_exact::<u64, _>(&bytes, limited),
+            Err(ReadError::TrailingBytes)
+        ));
+        assert_eq!(
+            deserialize_exact::<u64, _>(&bytes[..8], limited).unwrap(),
+            42
+        );
     }
 
     #[test]

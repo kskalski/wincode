@@ -338,6 +338,87 @@ unsafe impl<'a> Reader<'a> for &'a [u8] {
         // will will not read beyond the bounds of the slice, `n_bytes`.
         Ok(unsafe { SliceUnchecked::new(window) })
     }
+
+    #[inline]
+    fn as_limited_for(&mut self, size: usize) -> impl Reader<'a> {
+        LimitedSlice::new(self, size)
+    }
+}
+
+/// A limited window over a slice [`Reader`] that advances the parent by the number of bytes
+/// actually consumed, when dropped.
+///
+/// The limit is enforced by the window's own bounds checks, so reads through it cost the same as
+/// reads through the parent.
+pub struct LimitedSlice<'p, 'a> {
+    parent: &'p mut &'a [u8],
+    window: &'a [u8],
+    /// Window length at construction, used to derive the consumed byte count on drop.
+    len: usize,
+}
+
+impl<'p, 'a> LimitedSlice<'p, 'a> {
+    #[inline]
+    fn new(parent: &'p mut &'a [u8], size: usize) -> Self {
+        let len = size.min(parent.len());
+        let window = &parent[..len];
+        Self {
+            parent,
+            window,
+            len,
+        }
+    }
+}
+
+impl Drop for LimitedSlice<'_, '_> {
+    #[inline]
+    #[expect(clippy::arithmetic_side_effects)]
+    fn drop(&mut self) {
+        let consumed = self.len - self.window.len();
+        let parent = *self.parent;
+        *self.parent = &parent[consumed..];
+    }
+}
+
+unsafe impl<'a> Reader<'a> for LimitedSlice<'_, 'a> {
+    const BORROW_KINDS: u8 = <&'a [u8] as Reader<'a>>::BORROW_KINDS;
+
+    #[inline]
+    fn take_borrowed(&mut self, len: usize) -> ReadResult<&'a [u8]> {
+        self.window.take_borrowed(len)
+    }
+
+    #[inline(always)]
+    fn take_scoped(&mut self, len: usize) -> ReadResult<&[u8]> {
+        self.window.take_borrowed(len)
+    }
+
+    #[inline]
+    fn copy_into_slice(&mut self, dst: &mut [u8]) -> ReadResult<()> {
+        self.window.copy_into_slice(dst)
+    }
+
+    #[inline]
+    fn copy_into_uninit_slice(&mut self, dst: &mut [MaybeUninit<u8>]) -> ReadResult<()> {
+        self.window.copy_into_uninit_slice(dst)
+    }
+
+    #[inline(always)]
+    fn take_array<const N: usize>(&mut self) -> ReadResult<[u8; N]> {
+        self.window.take_array()
+    }
+
+    #[inline(always)]
+    unsafe fn as_trusted_for(&mut self, n_bytes: usize) -> ReadResult<impl Reader<'a>> {
+        // SAFETY: the caller's obligation is forwarded to the window, which is a prefix of the
+        // parent.
+        unsafe { self.window.as_trusted_for(n_bytes) }
+    }
+
+    #[inline]
+    fn as_limited_for(&mut self, size: usize) -> impl Reader<'a> {
+        LimitedSlice::new(&mut self.window, size)
+    }
 }
 
 unsafe impl<'a> Reader<'a> for &'a mut [u8] {
@@ -489,6 +570,61 @@ impl Writer for &mut [u8] {
 mod tests {
     #![allow(clippy::arithmetic_side_effects)]
     use {super::*, crate::proptest_config::proptest_cfg, alloc::vec::Vec, proptest::prelude::*};
+
+    #[test]
+    fn limited_slice_syncs_parent_on_drop() {
+        let bytes = [1, 2, 3, 4, 5];
+        let mut reader = bytes.as_slice();
+
+        {
+            let mut limited = reader.as_limited_for(4);
+            assert_eq!(limited.take_array::<2>().unwrap(), [1, 2]);
+        }
+        // Only the two consumed bytes advanced the parent.
+        assert_eq!(reader, &[3, 4, 5]);
+
+        {
+            let mut limited = reader.as_limited_for(2);
+            assert!(matches!(
+                limited.take_array::<3>(),
+                Err(ReadError::ReadSizeLimit(3))
+            ));
+            assert_eq!(limited.take_array::<2>().unwrap(), [3, 4]);
+        }
+        assert_eq!(reader, &[5]);
+    }
+
+    #[test]
+    fn limited_slice_limit_exceeding_input_is_clamped() {
+        let bytes = [1, 2, 3];
+        let mut reader = bytes.as_slice();
+
+        {
+            let mut limited = reader.as_limited_for(usize::MAX);
+            assert_eq!(limited.take_byte().unwrap(), 1);
+        }
+        assert_eq!(reader, &[2, 3]);
+    }
+
+    #[test]
+    fn limited_slice_nests() {
+        let bytes = [1, 2, 3, 4, 5];
+        let mut reader = bytes.as_slice();
+
+        {
+            let mut outer = reader.as_limited_for(3);
+            {
+                let mut inner = outer.as_limited_for(4);
+                assert_eq!(inner.take_byte().unwrap(), 1);
+                assert!(matches!(
+                    inner.take_array::<3>(),
+                    Err(ReadError::ReadSizeLimit(3))
+                ));
+            }
+            assert_eq!(outer.take_byte().unwrap(), 2);
+        }
+        assert_eq!(reader, &[3, 4, 5]);
+    }
 
     /// Execute the given block with supported readers.
     macro_rules! with_readers {
