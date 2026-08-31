@@ -201,6 +201,37 @@ impl TypeMeta {
             zero_copy: all_zero_copy,
         }
     }
+
+    /// How many leading `types` have a statically known size.
+    ///
+    /// One dynamic field makes the whole struct [`Self::Dynamic`], but the leading fields still
+    /// have a fixed total size, so the derive can reserve a trusted window for them.
+    #[expect(clippy::arithmetic_side_effects)]
+    pub const fn static_prefix_len<const N: usize>(types: [Self; N]) -> usize {
+        let mut len = 0;
+        while len < N {
+            match types[len] {
+                Self::Static { .. } => len += 1,
+                Self::Dynamic => break,
+            }
+        }
+        len
+    }
+
+    /// Summed serialized size of the fields counted by [`Self::static_prefix_len`].
+    #[expect(clippy::arithmetic_side_effects)]
+    pub const fn static_prefix_size<const N: usize>(types: [Self; N]) -> usize {
+        let mut acc = 0;
+        let mut i = 0;
+        while i < N {
+            match types[i] {
+                Self::Static { size, .. } => acc += size,
+                Self::Dynamic => break,
+            }
+            i += 1;
+        }
+        acc
+    }
 }
 
 /// Types that can be written (serialized) to a [`Writer`].
@@ -2044,6 +2075,138 @@ mod tests {
                 zero_copy: false
             }
         ));
+    }
+
+    /// Round-trip against bincode for each shape the prefix window can take.
+    #[test]
+    fn dynamic_struct_static_prefix_roundtrips() {
+        #[derive(
+            SchemaWrite, SchemaRead, Debug, PartialEq, serde::Serialize, serde::Deserialize,
+        )]
+        #[wincode(internal)]
+        struct Prefix {
+            a: u8,
+            b: u32,
+            c: u64,
+            tail: Vec<u8>,
+        }
+
+        #[derive(
+            SchemaWrite, SchemaRead, Debug, PartialEq, serde::Serialize, serde::Deserialize,
+        )]
+        #[wincode(internal)]
+        struct NoPrefix {
+            head: Vec<u8>,
+            a: u8,
+            b: u32,
+            c: u64,
+        }
+
+        #[derive(
+            SchemaWrite, SchemaRead, Debug, PartialEq, serde::Serialize, serde::Deserialize,
+        )]
+        #[wincode(internal)]
+        struct Split {
+            a: u8,
+            head: Vec<u8>,
+            b: u32,
+            tail: Vec<u8>,
+            c: u64,
+        }
+
+        #[derive(
+            SchemaWrite, SchemaRead, Debug, PartialEq, serde::Serialize, serde::Deserialize,
+        )]
+        #[wincode(internal)]
+        struct Skipped {
+            a: u8,
+            #[wincode(skip)]
+            #[serde(skip)]
+            ignored: u64,
+            b: u32,
+            tail: Vec<u8>,
+        }
+
+        fn check<T>(value: &T)
+        where
+            T: SchemaWrite<DefaultConfig, Src = T>
+                + for<'de> SchemaRead<'de, DefaultConfig, Dst = T>
+                + serde::Serialize
+                + serde::de::DeserializeOwned
+                + core::fmt::Debug
+                + PartialEq,
+        {
+            let encoded = serialize(value).unwrap();
+            assert_eq!(encoded, bincode::serialize(value).unwrap());
+            assert_eq!(&deserialize::<T>(&encoded).unwrap(), value);
+        }
+
+        for tail in [vec![], vec![7u8; 5]] {
+            check(&Prefix {
+                a: 1,
+                b: 2,
+                c: 3,
+                tail: tail.clone(),
+            });
+            check(&NoPrefix {
+                head: tail.clone(),
+                a: 1,
+                b: 2,
+                c: 3,
+            });
+            check(&Split {
+                a: 1,
+                head: tail.clone(),
+                b: 2,
+                tail: tail.clone(),
+                c: 3,
+            });
+            check(&Skipped {
+                a: 1,
+                ignored: 0,
+                b: 2,
+                tail: tail.clone(),
+            });
+        }
+    }
+
+    /// The window is sized from the schema, so a prefix that does not fit has to fail before
+    /// anything goes through it.
+    #[test]
+    fn dynamic_struct_static_prefix_rejects_short_input() {
+        #[derive(
+            SchemaWrite, SchemaRead, Debug, PartialEq, serde::Serialize, serde::Deserialize,
+        )]
+        #[wincode(internal)]
+        struct Prefix {
+            a: u64,
+            b: u64,
+            tail: Vec<u8>,
+        }
+
+        let encoded = serialize(&Prefix {
+            a: 1,
+            b: 2,
+            tail: vec![9],
+        })
+        .unwrap();
+
+        for truncated in 0..encoded.len() {
+            assert!(deserialize::<Prefix>(&encoded[..truncated]).is_err());
+        }
+
+        let mut buffer = [0u8; 8];
+        assert!(
+            crate::serialize_into(
+                buffer.as_mut_slice(),
+                &Prefix {
+                    a: 1,
+                    b: 2,
+                    tail: vec![],
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

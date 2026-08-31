@@ -13,8 +13,8 @@ use {
     proc_macro2::TokenStream,
     quote::quote,
     syn::{
-        DeriveInput, GenericParam, Generics, Path, PredicateType, Token, Type, WherePredicate,
-        parse_quote, punctuated::Punctuated,
+        DeriveInput, GenericParam, Generics, Ident, Member, Path, PredicateType, Token, Type,
+        WherePredicate, parse_quote, punctuated::Punctuated,
     },
 };
 
@@ -36,23 +36,51 @@ fn impl_struct(
         );
     }
 
-    let target = fields
-        .unskipped_iter()
-        .map(|field| field.target_fully_qualified(TraitImpl::SchemaWrite));
-    let mut size_count_idents = Vec::with_capacity(fields.len());
-
-    let writes = fields.struct_members_iter()
-        .filter_map(|(field, ident)| {
-            if field.skip.is_none() {
-                let target = field.target_fully_qualified(TraitImpl::SchemaWrite);
-                let write = quote! { #target::write(#crate_name::io::Writer::by_ref(&mut writer), &src.#ident)?; };
-                size_count_idents.push(ident);
-                Some(write)
-            } else {
-                None
+    let write_field = |writer: &Ident, target: &TokenStream, ident: &Member, guard: TokenStream| {
+        quote! {
+            if #guard {
+                #target::write(#crate_name::io::Writer::by_ref(&mut #writer), &src.#ident)?;
             }
-        })
-        .collect::<Vec<_>>();
+        }
+    };
+
+    let writer_ident: Ident = parse_quote!(writer);
+    let prefix_writer: Ident = parse_quote!(__wincode_prefix);
+
+    // Walk the fields that reach the wire, skipping the rest: a skipped field occupies no wire
+    // bytes, so the prefix guards compare against a field's position in this order rather than
+    // in the declaration. One pass gathers everything the impls need.
+    let mut targets = Vec::with_capacity(fields.len());
+    let mut size_count_idents = Vec::with_capacity(fields.len());
+    let mut prefix_metas = Vec::with_capacity(fields.len());
+    let mut prefix_writes = Vec::with_capacity(fields.len());
+    let mut suffix_writes = Vec::with_capacity(fields.len());
+    let mut unskipped_count = 0usize;
+
+    for (field, ident) in fields.struct_members_iter() {
+        if field.skip.is_some() {
+            continue;
+        }
+        let target = field.target_fully_qualified(TraitImpl::SchemaWrite);
+
+        prefix_metas.push(quote! { #target::TYPE_META });
+        prefix_writes.push(write_field(
+            &prefix_writer,
+            &target,
+            &ident,
+            quote! { #unskipped_count < __wincode_prefix_len },
+        ));
+        suffix_writes.push(write_field(
+            &writer_ident,
+            &target,
+            &ident,
+            quote! { #unskipped_count >= __wincode_prefix_len },
+        ));
+
+        targets.push(target);
+        size_count_idents.push(ident);
+        unskipped_count += 1;
+    }
 
     let type_meta_impl = fields.type_meta_impl(TraitImpl::SchemaWrite, repr, crate_name);
 
@@ -63,25 +91,31 @@ fn impl_struct(
             }
             let mut total = 0usize;
             #(
-                total += #target::size_of(&src.#size_count_idents)?;
+                total += #targets::size_of(&src.#size_count_idents)?;
             )*
             Ok(total)
         },
         quote! {
-            match <Self as #crate_name::SchemaWrite<__WincodeConfig>>::TYPE_META {
-                #crate_name::TypeMeta::Static { size, .. } => {
-                    // SAFETY: `size` is the serialized size of the struct, which is the sum
-                    // of the serialized sizes of the fields.
-                    // Calling `write` on each field will write exactly `size` bytes,
-                    // fully initializing the trusted window.
-                    let mut writer = unsafe { #crate_name::io::Writer::as_trusted_for(&mut writer, size) }?;
-                    #(#writes)*
-                    #crate_name::io::Writer::finish(&mut writer)?;
-                }
-                #crate_name::TypeMeta::Dynamic => {
-                    #(#writes)*
-                }
+            // The leading statically sized fields have a known total size, so reserve a
+            // trusted window over them and write the remaining fields through the parent.
+            let __wincode_prefix_len = const {
+                #crate_name::TypeMeta::static_prefix_len([#(#prefix_metas),*])
+            };
+            if __wincode_prefix_len > 0 {
+                let __wincode_prefix_size = const {
+                    #crate_name::TypeMeta::static_prefix_size([#(#prefix_metas),*])
+                };
+                // SAFETY: `__wincode_prefix_size` is the sum of the serialized sizes of the
+                // first `__wincode_prefix_len` fields, which are each statically sized.
+                // Calling `write` on each of those fields will write exactly
+                // `__wincode_prefix_size` bytes, fully initializing the trusted window.
+                let mut #prefix_writer = unsafe {
+                    #crate_name::io::Writer::as_trusted_for(&mut writer, __wincode_prefix_size)
+                }?;
+                #(#prefix_writes)*
+                #crate_name::io::Writer::finish(&mut #prefix_writer)?;
             }
+            #(#suffix_writes)*
             Ok(())
         },
         type_meta_impl,
